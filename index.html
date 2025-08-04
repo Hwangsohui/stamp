@@ -1,0 +1,371 @@
+import React, { useState, useEffect } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken } from 'firebase/auth';
+import { getFirestore, doc, setDoc, onSnapshot, collection, addDoc } from 'firebase/firestore';
+
+// Tailwind CSS is used for styling.
+const App = () => {
+  // Firebase global variables
+  const [db, setDb] = useState(null);
+  const [userId, setUserId] = useState(null);
+
+  const [students, setStudents] = useState([]);
+  const [selectedStudent, setSelectedStudent] = useState(null);
+  const [animationVisible, setAnimationVisible] = useState(false);
+  const [currentStampCount, setCurrentStampCount] = useState(0);
+
+  const [grade, setGrade] = useState('');
+  const [classNum, setClassNum] = useState('');
+  const [studentNum, setStudentNum] = useState('');
+  const [studentName, setStudentName] = useState('');
+  
+  // State for password protection
+  const [password, setPassword] = useState('');
+  const [isUnlocked, setIsUnlocked] = useState(false);
+  const [lockMessage, setLockMessage] = useState('');
+  const CORRECT_PASSWORD = '0218270329'; // 비밀번호가 '0218270329'로 변경되었습니다.
+
+  const animalEmojis = ['🐱', '🐶', '🐼', '🐹', '🐦']; // 귀여운 동물 도장 모양
+
+  // Initialize Firebase and handle authentication
+  useEffect(() => {
+    const initFirebase = async () => {
+      try {
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = JSON.parse(__firebase_config);
+        const app = initializeApp(firebaseConfig);
+        const firestore = getFirestore(app);
+        const authInstance = getAuth(app);
+        
+        // Sign in with custom token or anonymously
+        if (typeof __initial_auth_token !== 'undefined') {
+          await signInWithCustomToken(authInstance, __initial_auth_token);
+        } else {
+          await signInAnonymously(authInstance);
+        }
+
+        const user = authInstance.currentUser;
+        setUserId(user.uid);
+        setDb(firestore);
+        console.log("Firebase initialized and user authenticated.");
+
+      } catch (error) {
+        console.error("Error initializing Firebase:", error);
+      }
+    };
+
+    initFirebase();
+  }, []);
+
+  // Fetch students data from Firestore
+  useEffect(() => {
+    if (!db || !userId) return;
+
+    const studentsCollectionPath = `/artifacts/${typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'}/users/${userId}/students`;
+    const studentsCollectionRef = collection(db, studentsCollectionPath);
+
+    const unsubscribe = onSnapshot(studentsCollectionRef, (snapshot) => {
+      const studentsData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setStudents(studentsData);
+    }, (error) => {
+      console.error("Error fetching students:", error);
+    });
+
+    return () => unsubscribe();
+  }, [db, userId]);
+
+  // Handle student selection
+  useEffect(() => {
+    if (selectedStudent) {
+      setCurrentStampCount(selectedStudent.stamps);
+    } else {
+      setCurrentStampCount(0);
+    }
+  }, [selectedStudent]);
+
+  // Check password function
+  const checkPassword = () => {
+    if (password === CORRECT_PASSWORD) {
+      setIsUnlocked(true);
+      setLockMessage('잠금 해제되었습니다!');
+    } else {
+      setLockMessage('비밀번호가 틀렸습니다.');
+    }
+    setTimeout(() => setLockMessage(''), 3000);
+  };
+  
+  // CRUD functions
+  const addStudent = async () => {
+    if (!isUnlocked) return;
+    if (!grade || !classNum || !studentNum || !studentName) {
+      console.error("모든 필드를 채워주세요.");
+      return;
+    }
+    if (!db || !userId) {
+      console.error("Firestore가 준비되지 않았습니다.");
+      return;
+    }
+
+    try {
+      const studentsCollectionRef = collection(db, `/artifacts/${typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'}/users/${userId}/students`);
+      const newStudent = {
+        grade,
+        classNum,
+        studentNum,
+        studentName,
+        stamps: 0,
+        createdAt: new Date().toISOString()
+      };
+      await addDoc(studentsCollectionRef, newStudent);
+      setGrade('');
+      setClassNum('');
+      setStudentNum('');
+      setStudentName('');
+    } catch (error) {
+      console.error("학생 추가 중 오류 발생:", error);
+    }
+  };
+
+  const updateStudentStamps = async (studentId, newStampCount) => {
+    if (!isUnlocked) return;
+    if (!db || !userId) {
+      console.error("Firestore가 준비되지 않았습니다.");
+      return;
+    }
+    
+    // Ensure newStampCount doesn't go below 0
+    const finalStampCount = Math.max(0, newStampCount);
+
+    try {
+      const studentDocRef = doc(db, `/artifacts/${typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'}/users/${userId}/students`, studentId);
+      await setDoc(studentDocRef, { stamps: finalStampCount }, { merge: true });
+      if (selectedStudent && selectedStudent.id === studentId) {
+        setSelectedStudent({ ...selectedStudent, stamps: finalStampCount });
+      }
+    } catch (error) {
+      console.error("도장 업데이트 중 오류 발생:", error);
+    }
+  };
+
+  const handleStampAction = (numStamps) => {
+    if (!isUnlocked || !selectedStudent) {
+      console.error("학생을 먼저 선택해 주세요.");
+      return;
+    }
+
+    const newStampCount = selectedStudent.stamps + numStamps;
+    updateStudentStamps(selectedStudent.id, newStampCount);
+    triggerStampAnimation();
+  };
+  
+  const handleRemoveStamp = () => {
+    if (!isUnlocked || !selectedStudent) {
+      console.error("학생을 먼저 선택해 주세요.");
+      return;
+    }
+
+    const newStampCount = selectedStudent.stamps - 1;
+    updateStudentStamps(selectedStudent.id, newStampCount);
+  };
+  
+  const handleResetStamps = () => {
+    if (!isUnlocked || !selectedStudent) {
+      console.error("학생을 먼저 선택해 주세요.");
+      return;
+    }
+
+    updateStudentStamps(selectedStudent.id, 0);
+  };
+
+  const triggerStampAnimation = () => {
+    setAnimationVisible(true);
+    setTimeout(() => {
+      setAnimationVisible(false);
+    }, 1500); // 애니메이션 지속 시간
+  };
+
+  // Define the style object for the custom font
+  const fontStyle = {
+    fontFamily: 'Poor Story, cursive',
+  };
+
+  return (
+    <div className="min-h-screen p-4 flex flex-col items-center justify-start bg-[#e0f7e9]" style={fontStyle}>
+      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poor+Story&display=swap" />
+      <div className="w-full max-w-2xl bg-white p-6 rounded-3xl shadow-xl border-4 border-[#c0e8cf] mt-8 mb-8">
+        <h1 className="text-3xl font-bold text-center text-[#558b6e] mb-6">학생 도장판</h1>
+        
+        {/* Student List (Visible to all) */}
+        <div className="mb-8 p-4 bg-[#f0f9f3] rounded-2xl border-2 border-[#d6e9d7]">
+          <h2 className="text-xl font-bold text-[#558b6e] mb-4">학생 목록</h2>
+          <div className="grid gap-2">
+            {students
+              .sort((a, b) => a.studentNum - b.studentNum)
+              .map(student => (
+                <div
+                  key={student.id}
+                  // Only allow selection if unlocked
+                  onClick={() => isUnlocked ? setSelectedStudent(student) : null}
+                  className={`flex items-center justify-between p-3 rounded-xl cursor-pointer transition-colors duration-200 shadow-sm
+                    ${selectedStudent && selectedStudent.id === student.id
+                      ? 'bg-[#c0e8cf] text-[#335e46] font-bold'
+                      : 'bg-white hover:bg-[#e0f7e9]'
+                    }`}
+                >
+                  <span className="text-lg">
+                    {student.grade}학년 {student.classNum}반 {student.studentNum}번 {student.studentName}
+                  </span>
+                  <span className="text-xl font-bold text-[#f7a26f]">{student.stamps}</span>
+                </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Password Lock Section */}
+        {!isUnlocked && (
+          <div className="flex flex-col items-center p-4 bg-[#f0f9f3] rounded-2xl border-2 border-[#d6e9d7]">
+            <h2 className="text-xl font-bold text-[#558b6e] mb-4">선생님 모드</h2>
+            <div className="flex w-full space-x-2">
+              <input
+                type="password"
+                placeholder="비밀번호"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="flex-grow p-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-[#8bc3a5] text-lg"
+              />
+              <button
+                onClick={checkPassword}
+                className="py-3 px-6 bg-[#8bc3a5] text-white text-lg font-bold rounded-xl shadow-md hover:bg-[#6a9e87] transition-colors duration-200"
+              >
+                잠금 해제
+              </button>
+            </div>
+            {lockMessage && <p className={`mt-2 text-center text-sm ${lockMessage.includes('틀렸') ? 'text-red-500' : 'text-green-600'}`}>{lockMessage}</p>}
+          </div>
+        )}
+
+        {/* Main App Content (Conditional) */}
+        {isUnlocked && (
+          <>
+            {/* Student Input Form */}
+            <div className="mb-8 p-4 bg-[#f0f9f3] rounded-2xl border-2 border-[#d6e9d7]">
+              <h2 className="text-xl font-bold text-[#558b6e] mb-4">학생 추가</h2>
+              <div className="grid grid-cols-2 gap-4 mb-4">
+                <input
+                  type="number"
+                  placeholder="학년"
+                  value={grade}
+                  onChange={(e) => setGrade(e.target.value)}
+                  className="p-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-[#8bc3a5] text-lg"
+                />
+                <input
+                  type="number"
+                  placeholder="반"
+                  value={classNum}
+                  onChange={(e) => setClassNum(e.target.value)}
+                  className="p-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-[#8bc3a5] text-lg"
+                />
+                <input
+                  type="number"
+                  placeholder="번호"
+                  value={studentNum}
+                  onChange={(e) => setStudentNum(e.target.value)}
+                  className="p-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-[#8bc3a5] text-lg"
+                />
+                <input
+                  type="text"
+                  placeholder="이름"
+                  value={studentName}
+                  onChange={(e) => setStudentName(e.target.value)}
+                  className="p-3 rounded-xl border border-gray-300 focus:outline-none focus:ring-2 focus:ring-[#8bc3a5] text-lg"
+                />
+              </div>
+              <button
+                onClick={addStudent}
+                className="w-full py-3 bg-[#8bc3a5] text-white text-lg font-bold rounded-xl shadow-md hover:bg-[#6a9e87] transition-colors duration-200"
+              >
+                학생 추가
+              </button>
+            </div>
+            {/* Stamp Actions */}
+            {selectedStudent && (
+              <div className="p-4 bg-[#f0f9f3] rounded-2xl border-2 border-[#d6e9d7]">
+                <h2 className="text-xl font-bold text-[#558b6e] mb-4">{selectedStudent.studentName} 학생</h2>
+                <div className="text-center mb-4">
+                  <span className="text-2xl text-[#558b6e]">현재 도장 개수: </span>
+                  <span className="text-4xl font-extrabold text-[#f7a26f]">{currentStampCount}</span>
+                </div>
+                {/* Stamp Buttons */}
+                <div className="grid grid-cols-3 gap-4 mb-4">
+                  <button
+                    onClick={() => handleStampAction(1)}
+                    className="py-4 bg-[#8bc3a5] text-white text-lg font-bold rounded-xl shadow-md hover:bg-[#6a9e87] transition-colors duration-200"
+                  >
+                    도장 1개
+                  </button>
+                  <button
+                    onClick={() => handleStampAction(2)}
+                    className="py-4 bg-[#8bc3a5] text-white text-lg font-bold rounded-xl shadow-md hover:bg-[#6a9e87] transition-colors duration-200"
+                  >
+                    도장 2개
+                  </button>
+                  <button
+                    onClick={() => handleStampAction(3)}
+                    className="py-4 bg-[#8bc3a5] text-white text-lg font-bold rounded-xl shadow-md hover:bg-[#6a9e87] transition-colors duration-200"
+                  >
+                    도장 3개
+                  </button>
+                </div>
+                {/* Utility Buttons */}
+                <div className="grid grid-cols-2 gap-4">
+                  <button
+                    onClick={handleRemoveStamp}
+                    className="py-3 bg-[#f7a26f] text-white text-lg font-bold rounded-xl shadow-md hover:bg-[#d48860] transition-colors duration-200"
+                  >
+                    도장 빼기
+                  </button>
+                  <button
+                    onClick={handleResetStamps}
+                    className="py-3 bg-[#ff7373] text-white text-lg font-bold rounded-xl shadow-md hover:bg-[#d65f5f] transition-colors duration-200"
+                  >
+                    도장 초기화
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Stamp Animation */}
+      {animationVisible && (
+        <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-10 z-50 pointer-events-none">
+          <div className="relative w-48 h-48">
+            <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-8xl animate-pop-in-out">
+              {animalEmojis[Math.floor(Math.random() * animalEmojis.length)]}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Tailwind CSS and Custom CSS for animation */}
+      <style>{`
+        @keyframes pop-in-out {
+          0% { transform: translate(-50%, -50%) scale(0); opacity: 0; }
+          20% { transform: translate(-50%, -50%) scale(1.2); opacity: 1; }
+          50% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+          80% { transform: translate(-50%, -50%) scale(1.2); opacity: 0.5; }
+          100% { transform: translate(-50%, -50%) scale(1.5); opacity: 0; }
+        }
+        .animate-pop-in-out {
+          animation: pop-in-out 1.5s ease-out forwards;
+        }
+      `}</style>
+    </div>
+  );
+};
+
+export default App;
